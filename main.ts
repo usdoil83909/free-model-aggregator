@@ -460,7 +460,9 @@ function selectModels(parsed: any, reqs: any): any[] {
     const p = providers[m.provider];
     if (!p) continue;
     const meets = (!reqs.tools || m.tools) && (!reqs.vision || m.vision) && (!reqs.json || m.json);
-    (meets ? strict : loose).push([m, p]);
+    const arr = meets ? strict : loose;
+    if (REFUSED_PROVIDERS.has(String(p.id)) && arr === strict) continue;
+    arr.push([m, p]);
   }
   const cmp = (a: any, b: any) => {
     const ra = Number(a[0].rating_milli || a[0].rating || 0), rb = Number(b[0].rating_milli || b[0].rating || 0);
@@ -753,6 +755,8 @@ function* sseAnthropicFromResponse(resp: any, model: string): Generator<string> 
 
 // ---------- State & server ----------
 const STATE: any = { parsed: { providers: {}, models: [] }, catalog: { providers: [] } };
+const REFUSED_PROVIDERS: Set<string> = new Set();
+const REFUSE_COUNT: Record<string, number> = {};
 
 function sendJson(res: http.ServerResponse, code: number, obj: any) {
   const data = Buffer.from(JSON.stringify(obj), "utf8");
@@ -788,6 +792,7 @@ async function handleCompletion(req: http.IncomingMessage, res: http.ServerRespo
       // failover on 402/429/5xx to next best model one call at a time
       if (status === 0 || status === 402 || status === 429 || status >= 500) {
         lastErr = `provider ${providerId} model ${modelId} failed status ${status}`;
+        if (status === 429 || status === 402) { const n = (REFUSE_COUNT[String(providerId)] = (REFUSE_COUNT[String(providerId)] || 0) + 1); if (n >= 2) { REFUSED_PROVIDERS.add(String(providerId)); logErr(`refusing provider ${providerId} from now on`); } }
         try { fs.appendFileSync("prov_err.log", status + " " + providerId + " " + modelId + " " + String((resp as any).raw || "").slice(0, 300) + "\n"); } catch {}
         logErr(lastErr);
         continue;

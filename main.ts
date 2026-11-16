@@ -247,7 +247,9 @@ function getProviderKey(p: any): string {
     const v = process.env[envn];
     if (v) return v;
   }
-  return p.key_value || "";
+  if (p.key_value) return String(p.key_value);
+  if (p.key) return String(p.key);
+  return "";
 }
 function authHeaders(p: any): any {
   const auth = String(p.auth || "bearer").toLowerCase();

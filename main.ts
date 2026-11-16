@@ -381,9 +381,24 @@ function openaiMsgsToGemini(messages: any[]): {sysInstr: string | null, contents
         else if (c.type === "image_url") {
           const u = (c.image_url || {}).url || "";
           const dm = /^data:([^;]+);base64,(.+)$/.exec(u);
-          if (dm) parts.push({ inline_data: { mime_type: dm[1], data: dm[2] } });
+          if (dm) parts.push({ inlineData: { mimeType: dm[1], data: dm[2] } });
         }
       }
+    }
+    if ((m as any).tool_calls) {
+      for (const tc of ((m as any).tool_calls || [])) {
+        const fn = tc.function || {};
+        let args: any = {};
+        try { args = JSON.parse(fn.arguments || "{}"); } catch {}
+        parts.push({ functionCall: { name: fn.name, args } });
+      }
+    }
+    if (role === "tool") {
+      // convert tool message into functionResponse part
+      parts.length = 0;
+      let data: any = content;
+      try { data = typeof content === "string" ? JSON.parse(content) : content; } catch {}
+      parts.push({ functionResponse: { name: String((m as any).name || (m as any).tool_call_id || "tool"), response: { result: data } } });
     }
     if (parts.length) contents.push({ role: grole, parts });
   }
@@ -491,22 +506,53 @@ async function callProvider(p: any, modelId: string, reqApi: string, reqBody: an
       ? `${base}/v1beta/models/${mEnc}:streamGenerateContent?alt=sse`
       : `${base}/v1beta/models/${mEnc}:generateContent`;
     let body: any;
+    const body_tools_gemini: any[] = [];
+    const gcfg: any = {};
+    if (reqBody.max_tokens != null) gcfg.maxOutputTokens = reqBody.max_tokens;
+    const stops: any = reqBody.stop_sequences || (Array.isArray(reqBody.stop) ? reqBody.stop : (reqBody.stop ? [reqBody.stop] : null));
+    if (stops) gcfg.stopSequences = stops;
+    const gdecls: any[] = [];
+    for (const t of (reqBody.tools || [])) {
+      const fn = t.function || t;
+      gdecls.push({ name: fn.name, description: fn.description || "", parameters: fn.parameters || fn.input_schema || { type: "object", properties: {} } });
+    }
+    if (gdecls.length) body_tools_gemini = gdecls;
     if (reqApi === "openai") {
-      const { sysInstr, contents } = openaiMsgsToGemini(reqBody.messages || []);
-      body = { contents };
-      if (sysInstr) body.systemInstruction = { parts: [{ text: sysInstr }] };
+      const conv = openaiMsgsToGemini(reqBody.messages || [], true);
+      body = { contents: conv.contents };
+      if (conv.sysInstr) body.systemInstruction = { parts: [{ text: conv.sysInstr }] };
     } else {
       const msgs: any[] = [];
       for (const m of (reqBody.messages || [])) {
         const role = m.role === "user" ? "user" : "model";
         const c = m.content;
-        let txt = "";
-        if (typeof c === "string") txt = c;
-        else if (Array.isArray(c)) txt = c.filter((b:any)=>b && b.type==="text").map((b:any)=>b.text||"").join("");
-        msgs.push({ role, parts: [{ text: txt }] });
+        const parts: any[] = [];
+        if (typeof c === "string") parts.push({ text: c });
+        else if (Array.isArray(c)) for (const b of (c || [])) {
+          if (b.type === "text") parts.push({ text: b.text || "" });
+          else if (b.type === "image") {
+            const src = b.source || {};
+            if (src.type === "base64") parts.push({ inlineData: { mimeType: src.media_type || "image/png", data: src.data || "" } });
+          } else if (b.type === "tool_result") {
+            parts.push({ functionResponse: { name: String(b.tool_use_id || "tool"), response: { result: typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "") } } });
+          }
+        }
+        if (m.role === "assistant" && Array.isArray(m.content) === false && (m as any).tool_calls) {
+          for (const tc of ((m as any).tool_calls || [])) {
+            const fn = tc.function || {};
+            let args: any = {};
+            try { args = JSON.parse(fn.arguments || "{}"); } catch {}
+            parts.push({ functionCall: { name: fn.name, args } });
+          }
+        }
+        if (parts.length) msgs.push({ role, parts });
       }
       body = { contents: msgs };
+      const sys = (reqBody.system || "");
+      if (sys) body.systemInstruction = { parts: [{ text: typeof sys === "string" ? sys : JSON.stringify(sys) }] };
     }
+    if (body_tools_gemini.length) body.tools = body_tools_gemini;
+    if (Object.keys(gcfg).length) body.generationConfig = gcfg;
     return { wire: "gemini", resp: await httpJson("POST", target, body, headers, timeout) };
   } else {
     const target = base + "/v1/chat/completions";

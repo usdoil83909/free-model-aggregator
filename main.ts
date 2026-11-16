@@ -596,13 +596,94 @@ async function callProvider(p: any, modelId: string, reqApi: string, reqBody: an
   }
 }
 
+function sseToJson(wire: string, raw: Buffer): any | null {
+  const txt = raw.toString("utf8");
+  const objs: any[] = [];
+  for (const line of txt.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t.startsWith("data:")) continue;
+    const payload = t.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try { objs.push(JSON.parse(payload)); } catch {}
+  }
+  if (!objs.length) return null;
+  if (wire === "gemini") {
+    const merged: any = { candidates: [], usageMetadata: {} };
+    for (const o of objs) {
+      for (const c of (o.candidates || [])) {
+        let target = merged.candidates[c.index || 0];
+        if (!target) { target = { index: c.index || 0, content: { parts: [], role: c.content && c.content.role }, finishReason: c.finishReason }; merged.candidates[c.index || 0] = target; }
+        for (const p of ((c.content || {}).parts || [])) target.content.parts.push(p);
+        if (c.finishReason) target.finishReason = c.finishReason;
+      }
+      const um = o.usageMetadata || {};
+      for (const k of Object.keys(um)) {
+        if (typeof um[k] === "number") merged.usageMetadata[k] = (merged.usageMetadata[k] || 0) + um[k];
+        else merged.usageMetadata[k] = um[k];
+      }
+    }
+    merged.candidates = merged.candidates.filter(Boolean);
+    return merged;
+  }
+  if (wire === "openai") {
+    const first = objs[0];
+    const out: any = { id: first.id, object: "chat.completion", model: first.model, choices: [], usage: first.usage || {} };
+    for (const o of objs) {
+      for (const ch of (o.choices || [])) {
+        const i = ch.index || 0;
+        let c = out.choices[i];
+        if (!c) { c = { index: i, message: { role: "assistant", content: "", tool_calls: [] }, finish_reason: null }; out.choices[i] = c; }
+        const d = ch.delta || {};
+        if (d.content) c.message.content += d.content;
+        if (d.reasoning_content) c.message.reasoning_content = String(c.message.reasoning_content || "") + d.reasoning_content;
+        for (const tc of (d.tool_calls || [])) {
+          const ti = tc.index != null ? tc.index : c.message.tool_calls.length;
+          let t2 = c.message.tool_calls[ti];
+          if (!t2) { t2 = { id: tc.id || "", type: tc.type || "function", function: { name: "", arguments: "" } }; c.message.tool_calls[ti] = t2; }
+          if (tc.id) t2.id = tc.id;
+          if (tc.function && tc.function.name) t2.function.name += tc.function.name;
+          if (tc.function && tc.function.arguments) t2.function.arguments += tc.function.arguments;
+        }
+        if (ch.finish_reason) c.finish_reason = ch.finish_reason;
+      }
+      if (o.usage) out.usage = o.usage;
+    }
+    out.choices = out.choices.filter(Boolean);
+    for (const c of out.choices) if (!c.message.tool_calls.length) delete c.message.tool_calls;
+    return out;
+  }
+  if (wire === "anthropic") {
+    const out: any = { id: "", type: "message", role: "assistant", model: "", content: [], stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } };
+    const blocks: any = {};
+    for (const o of objs) {
+      if (o.type === "message_start" && o.message) { out.id = o.message.id || ""; out.model = o.message.model || ""; if (o.message.usage) out.usage.input_tokens = o.message.usage.input_tokens || 0; }
+      if (o.type === "content_block_start") { blocks[o.index] = { type: o.content_block && o.content_block.type, text: "", name: o.content_block && o.content_block.name, id: o.content_block && o.content_block.id, input: "" }; }
+      if (o.type === "content_block_delta") { const b = blocks[o.index]; if (b) { if (o.delta && o.delta.type === "text_delta") b.text += o.delta.text || ""; else if (o.delta && o.delta.type === "input_json_delta") b.input += o.delta.partial_json || ""; } }
+      if (o.type === "message_delta" && o.delta) { out.stop_reason = o.delta.stop_reason || out.stop_reason; if (o.usage) out.usage.output_tokens = o.usage.output_tokens || 0; }
+    }
+    for (const k of Object.keys(blocks).sort((a, b) => Number(a) - Number(b))) {
+      const b = blocks[k];
+      if (b.type === "text" || b.type === "thinking") out.content.push({ type: "text", text: b.text });
+      else if (b.type === "tool_use") { let inp: any = {}; try { inp = JSON.parse(b.input || "{}"); } catch {} out.content.push({ type: "tool_use", id: b.id, name: b.name, input: inp }); }
+    }
+    return out;
+  }
+  return null;
+}
+
 function normalizeResponse(wire: string, status: number, ct: string, raw: Buffer, targetApi: string, modelId: string): {norm:any|null, err:string|null} {
   if (status < 200 || status >= 300) return { norm: null, err: `status ${status}: ${raw.toString("utf8").slice(0,200)}` };
   let data: any;
-  try {
-    data = JSON.parse(raw.toString("utf8"));
-  } catch (e) {
-    return { norm: null, err: `decode error: ${e}` };
+  if (String(ct || "").includes("text/event-stream")) {
+    data = sseToJson(wire, raw);
+    if (!data) return { norm: null, err: "empty SSE" };
+  } else {
+    try {
+      data = JSON.parse(raw.toString("utf8"));
+    } catch (e) {
+      data = sseToJson(wire, raw);
+      if (!data) return { norm: null, err: `decode error: ${e}` };
+    }
   }
   if (wire === "openai") {
     if (targetApi === "openai") return { norm: data, err: null };

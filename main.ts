@@ -796,8 +796,7 @@ async function handleCompletion(req: http.IncomingMessage, res: http.ServerRespo
       if (status === 0 || status === 402 || status === 429 || status >= 500) {
         lastErr = `provider ${providerId} model ${modelId} failed status ${status}`;
         if (status === 429 || status === 402) { const n = (REFUSE_COUNT[String(providerId)] = (REFUSE_COUNT[String(providerId)] || 0) + 1); if (n >= 2) { REFUSED_PROVIDERS.add(String(providerId)); logErr(`refusing provider ${providerId} from now on`); } }
-        try { fs.appendFileSync("prov_err.log", status + " " + providerId + " " + modelId + " " + String((resp as any).raw || "").slice(0, 300) + "\n"); } catch {}
-        logErr(lastErr);
+              logErr(lastErr);
         continue;
       }
       const { norm, err } = normalizeResponse(wire, status, resp.ct, resp.raw, targetApi, modelId);
@@ -828,7 +827,6 @@ async function handleCompletion(req: http.IncomingMessage, res: http.ServerRespo
     }
   }
   sendJson(res, 502, { error: { message: String(lastErr), type: "upstream_error" } });
-  try { fs.appendFileSync("prov_err.log", "502 final: " + String(lastErr).slice(0, 400) + "\n"); } catch {}
 }
 
 async function requestHandler(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -912,7 +910,6 @@ async function main() {
   server.listen(0, "0.0.0.0", async () => {
     const addr = server.address();
     const port = addr && addr.port ? addr.port : 0;
-    console.error("MFPORT=" + port);
     await registerSelf(port, catalog);
     pollWork();
   });

@@ -50,7 +50,22 @@ function kvPairs(s: string): Record<string, string> {
   return pairs;
 }
 
+
+function extractSchemaJson(text: string, schema: string): any {
+  const marker = '{"schema":"' + schema + '"';
+  const idx = text.indexOf(marker);
+  if (idx < 0) return null;
+  let depth = 0;
+  for (let i = idx; i < text.length; i++) {
+    const c = text[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) { try { return JSON.parse(text.slice(idx, i + 1)); } catch { return null; } } }
+  }
+  return null;
+}
+
 function parseBrief(text: string | null): any {
+  const parsedObj: any = {};
   const providers: Record<string, any> = {};
   const models: any[] = [];
   if (!text) return { providers, models };
@@ -146,6 +161,25 @@ function parseBrief(text: string | null): any {
       }
     }
   }
+  const pj = extractSchemaJson(text, "free-model-aggregator-01/providers/v1");
+  if (pj && Array.isArray(pj.providers)) {
+    for (const p of pj.providers) {
+      providers[p.id] = { id: p.id, name: p.name, wire: p.wire, auth: p.auth, key_env: p.key_env, key: p.key, base_url: p.path || p.base_url || "" };
+    }
+  }
+  const rj = extractSchemaJson(text, "free-model-aggregator-01/ratings/v1");
+  if (rj && Array.isArray(rj.ratings)) {
+    models.length = 0;
+    for (const m of rj.ratings) {
+      models.push({ id: m.model, provider: m.provider, rating_milli: m.rating_milli, context_length: m.context_length, tools: !!m.tools, vision: !!m.vision, json: !!m.json, free: m.free !== false });
+    }
+  }
+  const wj = extractSchemaJson(text, "free-model-aggregator-01/workload/v1");
+  if (wj && Array.isArray(wj.manifest)) {
+    (parsedObj as any).manifest = wj.manifest;
+  }
+
+
   return { providers, models };
 }
 
@@ -422,7 +456,9 @@ function selectModels(parsed: any, reqs: any): any[] {
 // ---------- Provider call ----------
 async function callProvider(p: any, modelId: string, reqApi: string, reqBody: any, stream: boolean): Promise<{wire:string, resp:{status:number,ct:string,raw:Buffer}}> {
   const wire = String(p.wire || "openai").toLowerCase();
-  const base = String(p.base_url || "").replace(/\/+$/, "");
+  const rawBase = String(p.base_url || "").replace(/\/+$/, "");
+  const envBase = String(process.env.MAKEFUN_ENV_URL || "").replace(/\/+$/, "");
+  const base = rawBase.startsWith("/") ? envBase + rawBase : rawBase;
   const headers = authHeaders(p);
   const timeout = 60000;
   if (wire === "anthropic") {
@@ -734,8 +770,9 @@ async function main() {
 
   const server = http.createServer((req, res) => { requestHandler(req, res); });
   server.listen(0, "0.0.0.0", async () => {
-    const addr = server.address() as any;
+    const addr = server.address();
     const port = addr && addr.port ? addr.port : 0;
+    console.error("MFPORT=" + port);
     await registerSelf(port, catalog);
     pollWork();
   });

@@ -518,7 +518,7 @@ async function callProvider(p: any, modelId: string, reqApi: string, reqBody: an
       const fn = t.function || t;
       gdecls.push({ name: fn.name, description: fn.description || "", parameters: fn.parameters || fn.input_schema || { type: "object", properties: {} } });
     }
-    if (gdecls.length) body_tools_gemini = gdecls;
+    for (const gd of gdecls) body_tools_gemini.push(gd);
     if (reqApi === "openai") {
       const conv = openaiMsgsToGemini(reqBody.messages || [], true);
       body = { contents: conv.contents };

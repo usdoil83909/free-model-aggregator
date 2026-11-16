@@ -437,22 +437,23 @@ function requestRequirements(body: any, api: string): any {
 }
 
 function selectModels(parsed: any, reqs: any): any[] {
-  const cands: any[] = [];
+  const strict: any[] = [];
+  const loose: any[] = [];
   const providers = parsed.providers || {};
   for (const m of (parsed.models || [])) {
-    if (reqs.tools && !m.tools) continue;
-    if (reqs.vision && !m.images) continue;
-    if (reqs.json && !m.json) continue;
+    if (m.free === false) continue;
     const p = providers[m.provider];
     if (!p) continue;
-    cands.push([m, p]);
+    const meets = (!reqs.tools || m.tools) && (!reqs.vision || m.vision) && (!reqs.json || m.json);
+    (meets ? strict : loose).push([m, p]);
   }
-  cands.sort((a: any, b: any) => {
-    const ra = parseFloat(a[0].rating || 0), rb = parseFloat(b[0].rating || 0);
+  const cmp = (a: any, b: any) => {
+    const ra = Number(a[0].rating_milli || a[0].rating || 0), rb = Number(b[0].rating_milli || b[0].rating || 0);
     if (rb !== ra) return rb - ra;
     return String(a[0].id || "").localeCompare(String(b[0].id || ""));
-  });
-  return cands;
+  };
+  strict.sort(cmp); loose.sort(cmp);
+  return strict.length ? strict : loose;
 }
 
 // ---------- Provider call ----------
@@ -660,6 +661,7 @@ async function handleCompletion(req: http.IncomingMessage, res: http.ServerRespo
       // failover on 402/429/5xx to next best model one call at a time
       if (status === 0 || status === 402 || status === 429 || status >= 500) {
         lastErr = `provider ${providerId} model ${modelId} failed status ${status}`;
+        try { fs.appendFileSync("prov_err.log", status + " " + providerId + " " + modelId + " " + String((resp as any).raw || "").slice(0, 300) + "\n"); } catch {}
         logErr(lastErr);
         continue;
       }

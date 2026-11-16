@@ -487,6 +487,8 @@ async function callProvider(p: any, modelId: string, reqApi: string, reqBody: an
     if (reqApi === "openai") {
       const { system, out } = openaiToAnthropicMessages(reqBody.messages || []);
       body = { model: modelId, messages: out, max_tokens: reqBody.max_tokens || 1024, stream: !!stream };
+      const astops: any = reqBody.stop_sequences || (Array.isArray(reqBody.stop) ? reqBody.stop : (reqBody.stop ? [reqBody.stop] : null));
+      if (astops) body.stop_sequences = astops;
       if (system) body.system = system;
       if (reqBody.tools) {
         const tools: any[] = [];
@@ -586,6 +588,7 @@ async function callProvider(p: any, modelId: string, reqApi: string, reqBody: an
         }
       }
       body = { model: modelId, messages: msgs, stream: !!stream, max_tokens: reqBody.max_tokens || 1024 };
+      if (reqBody.stop_sequences) body.stop = reqBody.stop_sequences;
       if (reqBody.tools) {
         const tools: any[] = [];
         for (const t of (reqBody.tools || [])) {

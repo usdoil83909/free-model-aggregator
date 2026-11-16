@@ -555,7 +555,7 @@ async function callProvider(p: any, modelId: string, reqApi: string, reqBody: an
       const sys = (reqBody.system || "");
       if (sys) body.systemInstruction = { parts: [{ text: typeof sys === "string" ? sys : JSON.stringify(sys) }] };
     }
-    if (body_tools_gemini.length) body.tools = body_tools_gemini;
+    if (body_tools_gemini.length) body.tools = [{ functionDeclarations: body_tools_gemini }];
     if (Object.keys(gcfg).length) body.generationConfig = gcfg;
     return { wire: "gemini", resp: await httpJson("POST", target, body, headers, timeout) };
   } else {

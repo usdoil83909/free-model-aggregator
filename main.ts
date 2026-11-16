@@ -820,6 +820,7 @@ async function handleCompletion(req: http.IncomingMessage, res: http.ServerRespo
     }
   }
   sendJson(res, 502, { error: { message: String(lastErr), type: "upstream_error" } });
+  try { fs.appendFileSync("prov_err.log", "502 final: " + String(lastErr).slice(0, 400) + "\n"); } catch {}
 }
 
 async function requestHandler(req: http.IncomingMessage, res: http.ServerResponse) {
